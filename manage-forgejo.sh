@@ -25,10 +25,11 @@ MEMORY="2048" # 2GB RAM
 DISK="20"     # 20GB disk space
 
 # --- Forgejo Settings ---
+FORGEJO_VERSION="7.0.5" # You can update this to the latest version from codeberg.org
 FORGEJO_USER="forgejo"
 FORGEJO_HOME="/var/lib/forgejo"
 FORGEJO_CONFIG_DIR="/etc/forgejo"
-FORGEJO_BINARY_URL="https://codeberg.org/forgejo/forgejo/releases/latest/download/forgejo-linux-amd64"
+FORGEJO_BINARY_URL="https://codeberg.org/forgejo/forgejo/releases/download/v${FORGEJO_VERSION}/forgejo-${FORGEJO_VERSION}-linux-amd64"
 ### ===============================================
 
 # --- Helper Functions ---
