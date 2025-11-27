@@ -1,0 +1,33 @@
+services:
+  wg-easy:
+    image: weejewel/wg-easy:latest
+    container_name: wg-easy
+    environment:
+      # WG_HOST is the public-facing IP/domain of the VPN server.
+      # This is the MOST IMPORTANT variable to set.
+      - WG_HOST=${WG_HOST}
+
+      # The password for the wg-easy web UI.
+      - PASSWORD=${PASSWORD}
+
+      # Optional: Default DNS server for clients.
+      - WG_DEFAULT_DNS=1.1.1.1
+
+      # Optional: The default client allowed IPs.
+      # Defaults to the office LAN and the VPN subnet.
+      - WG_ALLOWED_IPS=${WG_ALLOWED_IPS_DEFAULT}
+    volumes:
+      # This volume is crucial. It stores the WireGuard configuration files.
+      - ./config:/etc/wireguard
+    ports:
+      # Port for the wg-easy web UI
+      - "51821:51821/tcp"
+      # Port for the WireGuard VPN connection itself
+      - "51820:51820/udp"
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    sysctls:
+      - net.ipv4.ip_forward=1
+      - net.ipv4.conf.all.src_valid_mark=1
