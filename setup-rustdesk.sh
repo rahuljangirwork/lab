@@ -2,16 +2,16 @@
 set -e
 
 #================================================================================
-#         RustDesk + Tailscale Private Server Management Script
+#   RustDesk API Server + Tailscale Private Deployment Management Script
 #================================================================================
-# This script automates the setup, destruction, and management of a self-hosted
-# RustDesk server that is only accessible over a private Tailscale network.
+# This script automates the setup of a self-hosted RustDesk API server
+# (from lejianwen) that is only accessible over a private Tailscale network.
 #================================================================================
 
 # --- Configuration ---
-CONTAINER_NAME_HBBS='rustdesk-server-hbbs'
-CONTAINER_NAME_HBBR='rustdesk-server-hbbr'
-DOCKER_IMAGE='rustdesk/rustdesk-server:latest'
+CONTAINER_NAME='rustdesk-server'
+# Using the all-in-one image you requested
+DOCKER_IMAGE='lejianwen/rustdesk-api:full-s6'
 DATA_DIR='/var/lib/rustdesk-data'
 
 # --- Helper Functions ---
@@ -31,22 +31,18 @@ check_root() {
 }
 
 setup() {
-    print_status "Starting RustDesk + Tailscale Setup..."
+    print_status "Starting RustDesk API Server + Tailscale Setup..."
     
     # Step 1: Install Dependencies
-    print_status "[1/4] Installing Dependencies..."
+    print_status "[1/5] Installing Dependencies..."
     apt-get update >/dev/null
     apt-get install -y curl ca-certificates >/dev/null
-    if ! command -v docker &> /dev/null; then
-        curl -fsSL https://get.docker.com | sh >/dev/null
-    fi
-    if ! command -v tailscale &> /dev/null; then
-        curl -fsSL https://tailscale.com/install.sh | sh >/dev/null
-    fi
+    if ! command -v docker &> /dev/null; then curl -fsSL https://get.docker.com | sh >/dev/null; fi
+    if ! command -v tailscale &> /dev/null; then curl -fsSL https://tailscale.com/install.sh | sh >/dev/null; fi
     success "Dependencies are installed."
 
     # Step 2: Configure Tailscale
-    print_status "[2/4] Configuring Tailscale..."
+    print_status "[2/5] Configuring Tailscale..."
     if ! tailscale status | grep -q "Logged in"; then
         print_warning "You need to log in to Tailscale to continue."
         tailscale up
@@ -55,44 +51,58 @@ setup() {
     [ -z "$TAILSCALE_IP" ] && print_error "Could not get Tailscale IP." && exit 1
     success "This server's private Tailscale IP is: $TAILSCALE_IP"
 
-    # Step 3: Run RustDesk Containers
-    print_status "[3/4] Deploying RustDesk Server Containers..."
-    mkdir -p $DATA_DIR
+    # Step 3: Get User Input
+    print_status "[3/5] Preparing Configuration..."
+    local admin_pass confirm_pass
+    while true;
+    do
+        read -sp "Enter a password for the RustDesk web admin panel: " admin_pass; echo
+        read -sp "Confirm password: " confirm_pass; echo
+        [ "$admin_pass" == "$confirm_pass" ] && [ -n "$admin_pass" ] && break
+        print_warning "Passwords do not match or are empty. Please try again."
+    done
+    success "Password has been set."
+
+    # Step 4: Run RustDesk Container
+    print_status "[4/5] Deploying RustDesk API Server Container..."
+    mkdir -p "$DATA_DIR/server" "$DATA_DIR/api"
     
-    if [ "$(docker ps -a -q -f name=$CONTAINER_NAME_HBBS)" ]; then
-        print_warning "Removing existing RustDesk containers..."
-        docker stop $CONTAINER_NAME_HBBS $CONTAINER_NAME_HBBR &>/dev/null || true
-        docker rm $CONTAINER_NAME_HBBS $CONTAINER_NAME_HBBR &>/dev/null || true
+    if [ "$(docker ps -a -q -f name=$CONTAINER_NAME)" ]; then
+        print_warning "Removing existing RustDesk container(s)..."
+        docker stop $CONTAINER_NAME &>/dev/null || true
+        docker rm $CONTAINER_NAME &>/dev/null || true
     fi
 
-    print_status "Starting hbbs (ID/Rendezvous Server)..."
-    docker run -d --name $CONTAINER_NAME_HBBS \
-        --network=host -v $DATA_DIR:/data \
-        -e RELAY="$TAILSCALE_IP:21117" \
-        --restart unless-stopped \
-        $DOCKER_IMAGE hbbs -r "$TAILSCALE_IP:21117" >/dev/null
+    print_status "Pulling new Docker image (this may take a moment)..."
+    docker pull $DOCKER_IMAGE
 
-    print_status "Starting hbbr (Relay Server)..."
-    docker run -d --name $CONTAINER_NAME_HBBR \
-        --network=host -v $DATA_DIR:/data \
+    print_status "Starting RustDesk container..."
+    docker run -d --name $CONTAINER_NAME \
+        --network=host \
+        -v "$DATA_DIR/server:/data" \
+        -v "$DATA_DIR/api:/app/data" \
+        -e "RUSTDESK_API_RUSTDESK_ID_SERVER=$TAILSCALE_IP:21116" \
+        -e "RUSTDESK_API_RUSTDESK_RELAY_SERVER=$TAILSCALE_IP:21117" \
+        -e "RUSTDESK_API_RUSTDESK_API_SERVER=http://$TAILSCALE_IP:21114" \
+        -e "RUSTDESK_API_RUSTDESK_ADMIN_PASSWD=$admin_pass" \
         --restart unless-stopped \
-        $DOCKER_IMAGE hbbr >/dev/null
-    success "RustDesk containers started."
+        $DOCKER_IMAGE >/dev/null
+    success "RustDesk container started."
 
-    # Step 4: Display Information
-    print_status "[4/4] Finalizing Setup..."
+    # Step 5: Display Information
+    print_status "[5/5] Finalizing Setup..."
     status
 }
 
 destroy() {
-    print_warning "This will permanently stop and remove the RustDesk containers and delete all configuration data from $DATA_DIR."
+    print_warning "This will permanently stop and remove the RustDesk container and delete all configuration data from $DATA_DIR."
     read -p "Are you sure? [y/N] " -n 1 -r; echo
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then print_status "Destroy cancelled."; return; fi
     
-    print_status "Stopping containers..."
-    docker stop $CONTAINER_NAME_HBBS $CONTAINER_NAME_HBBR &>/dev/null || true
-    print_status "Removing containers..."
-    docker rm $CONTAINER_NAME_HBBS $CONTAINER_NAME_HBBR &>/dev/null || true
+    print_status "Stopping container..."
+    docker stop $CONTAINER_NAME &>/dev/null || true
+    print_status "Removing container..."
+    docker rm $CONTAINER_NAME &>/dev/null || true
     print_status "Deleting data directory: $DATA_DIR..."
     rm -rf $DATA_DIR
     success "RustDesk server has been destroyed."
@@ -100,30 +110,36 @@ destroy() {
 
 status() {
     print_status "--- RustDesk Server Status ---"
-    if ! command -v docker &>/dev/null || ! docker ps -a --format '{{.Names}}' | grep -q "$CONTAINER_NAME_HBBS"; then
+    if ! command -v docker &>/dev/null || ! docker ps -a --format '{{.Names}}' | grep -q "$CONTAINER_NAME"; then
         print_warning "RustDesk server is not installed. Please run Setup."
         return
     fi
 
-    docker ps --filter "name=rustdesk-server"
+    docker ps --filter "name=$CONTAINER_NAME"
 
     local tailscale_ip=$(tailscale ip -4 2>/dev/null || echo "Not Available")
     
     print_status "Waiting for public key to be generated (up to 30s)..."
     local counter=0
-    while [ ! -f "$DATA_DIR/id_ed25519.pub" ]; do
+    while [ ! -f "$DATA_DIR/server/id_ed25519.pub" ]; do
         if [ $counter -ge 30 ]; then break; fi
         sleep 1; counter=$((counter+1))
     done
-    local public_key=$(cat $DATA_DIR/id_ed25519.pub 2>/dev/null || echo "Not found. Please check logs or wait longer.")
+    local public_key=$(cat $DATA_DIR/server/id_ed25519.pub 2>/dev/null || echo "Not found. Check logs with option 6.")
 
     echo ""
     echo "============================================================="
     echo -e "${GREEN}      RustDesk on Tailscale - Configuration Details${NC}"
     echo "============================================================="
-    echo -e "\n${YELLOW}🔧 Configure Your RustDesk Clients with this information:${NC}"
+    echo -e "\n${YELLOW}🌐 Web Admin Panel:${NC}"
+    echo "   URL:      http://$tailscale_ip:21114/_admin/"
+    echo "   Username: admin"
+    echo "   Password: (the password you set during setup)"
+    echo ""
+    echo -e "${YELLOW}🔧 Configure Your RustDesk Clients with this information:${NC}"
     echo "   ID Server:    $tailscale_ip"
     echo "   Relay Server: $tailscale_ip"
+    echo "   API Server:   http://$tailscale_ip:21114"
     echo "   Public Key:   $public_key"
     echo ""
 }
@@ -131,7 +147,7 @@ status() {
 show_menu() {
     clear
     echo "==================================================="
-    echo "  RustDesk + Tailscale Server Management"
+    echo "  RustDesk API Server + Tailscale Management"
     echo "==================================================="
     echo " 1. Setup / Re-deploy Server"
     echo -e " 2. ${RED}Destroy Server and Data${NC}"
@@ -147,16 +163,17 @@ show_menu() {
 
 main() {
     check_root
-    while true; do
+    while true;
+    do
         show_menu
         read -p "Enter your choice [0-6]: " choice
         case "$choice" in
             1) setup ;;
             2) destroy ;;
-            3) print_status "Starting containers..."; docker start $CONTAINER_NAME_HBBS $CONTAINER_NAME_HBBR ;;
-            4) print_status "Stopping containers..."; docker stop $CONTAINER_NAME_HBBS $CONTAINER_NAME_HBBR ;;
+            3) print_status "Starting container..."; docker start $CONTAINER_NAME ;;
+            4) print_status "Stopping container..."; docker stop $CONTAINER_NAME ;;
             5) status ;;
-            6) print_status "Following logs for hbbs (ID Server). Press Ctrl+C to stop."; docker logs -f $CONTAINER_NAME_HBBS ;;
+            6) print_status "Following logs. Press Ctrl+C to stop."; docker logs -f $CONTAINER_NAME ;;
             0) break ;;
             *) print_error "Invalid option." ;;
         esac
