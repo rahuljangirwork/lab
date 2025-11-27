@@ -2,10 +2,10 @@
 set -e
 
 #================================================================================
-#   All-in-One Forgejo LXC Management Script for Proxmox
+#   All-in-One Forgejo (Docker) LXC Management Script for Proxmox
 #================================================================================
 # This script, run on the Proxmox host, manages the entire lifecycle of a
-# self-hosted Forgejo Git service running in an LXC container.
+# self-hosted Forgejo Git service running via Docker in an LXC container.
 #================================================================================
 
 ### ========== CONFIGURATION ========== 
@@ -24,12 +24,11 @@ CORES="2"
 MEMORY="2048" # 2GB RAM
 DISK="20"     # 20GB disk space
 
-# --- Forgejo Settings ---
-FORGEJO_VERSION="7.0.5" # You can update this to the latest version from codeberg.org
-FORGEJO_USER="forgejo"
-FORGEJO_HOME="/var/lib/forgejo"
-FORGEJO_CONFIG_DIR="/etc/forgejo"
-FORGEJO_BINARY_URL="https://codeberg.org/forgejo/forgejo/releases/download/v${FORGEJO_VERSION}/forgejo-${FORGEJO_VERSION}-linux-amd64"
+# --- Forgejo Docker Settings ---
+FORGEJO_VERSION="7.0.5" # You can update this to the latest version
+DOCKER_IMAGE="codeberg.org/forgejo/forgejo:${FORGEJO_VERSION}"
+DATA_DIR="/var/lib/forgejo-data" # Data directory inside the LXC
+CONTAINER_NAME="forgejo"
 ### ===============================================
 
 # --- Helper Functions ---
@@ -42,10 +41,10 @@ success() { echo -e "\n${GREEN}[SUCCESS] $1${NC}"; }
 # --- Core Functions ---
 
 setup() {
-    print_status "Starting Full Setup for Forgejo LXC ${CTID}..."
+    print_status "Starting Full Setup for Forgejo (Docker) LXC ${CTID}..."
 
     # Step 1: Create LXC
-    print_status "[1/5] Creating LXC ${CTID}..."
+    print_status "[1/4] Creating LXC ${CTID}..."
     if pct status "${CTID}" &>/dev/null; then
         print_warning "CT ${CTID} already exists. Skipping creation."
     else
@@ -57,55 +56,39 @@ setup() {
         print_warning "Waiting for LXC to boot..." && sleep 10
     fi
 
-    # Step 2: Install Forgejo
-    print_status "[2/5] Installing Forgejo inside the container..."
+    # Step 2: Install Dependencies (Docker)
+    print_status "[2/4] Installing Dependencies in LXC..."
     pct exec "${CTID}" -- apt-get update >/dev/null
-    pct exec "${CTID}" -- apt-get install -y wget git >/dev/null
-    
-    print_status "Downloading Forgejo binary..."
-    pct exec "${CTID}" -- wget -O /usr/local/bin/forgejo "${FORGEJO_BINARY_URL}"
-    pct exec "${CTID}" -- chmod +x /usr/local/bin/forgejo
-    success "Forgejo binary installed."
-
-    # Step 3: Create User and Directories
-    print_status "[3/5] Setting up user and directories..."
-    if ! pct exec "${CTID}" -- id -u ${FORGEJO_USER} &>/dev/null; then
-        pct exec "${CTID}" -- adduser --system --group --disabled-password --home ${FORGEJO_HOME} ${FORGEJO_USER}
-    else
-        print_warning "User '${FORGEJO_USER}' already exists."
+    pct exec "${CTID}" -- apt-get install -y curl ca-certificates >/dev/null
+    if ! pct exec "${CTID}" -- command -v docker &>/dev/null; then
+        print_warning "Installing Docker..."
+        pct exec "${CTID}" -- bash -c "curl -fsSL https://get.docker.com | sh" >/dev/null
     fi
-    pct exec "${CTID}" -- mkdir -p "${FORGEJO_HOME}" "${FORGEJO_CONFIG_DIR}"
-    pct exec "${CTID}" -- chown -R "${FORGEJO_USER}:${FORGEJO_USER}" "${FORGEJO_HOME}" "${FORGEJO_CONFIG_DIR}"
-    success "Forgejo user and directories configured."
+    success "Dependencies installed."
 
-    # Step 4: Create systemd Service
-    print_status "[4/5] Creating systemd service..."
-    cat <<EOF | pct exec "${CTID}" -- tee /etc/systemd/system/forgejo.service >/dev/null
-[Unit]
-Description=Forgejo
-After=syslog.target
-After=network.target
+    # Step 3: Deploy Docker Container
+    print_status "[3/4] Deploying Forgejo Docker Container..."
+    pct exec "${CTID}" -- mkdir -p "${DATA_DIR}"
+    
+    if pct exec "${CTID}" -- docker ps -a -q -f name=${CONTAINER_NAME} | grep -q .; then
+        print_warning "Removing existing Forgejo container..."
+        pct exec "${CTID}" -- docker stop ${CONTAINER_NAME} &>/dev/null || true
+        pct exec "${CTID}" -- docker rm ${CONTAINER_NAME} &>/dev/null || true
+    fi
+    
+    print_status "Pulling latest Forgejo image: ${DOCKER_IMAGE}"
+    pct exec "${CTID}" -- docker pull ${DOCKER_IMAGE} >/dev/null
+    
+    pct exec "${CTID}" -- docker run -d --name ${CONTAINER_NAME} \
+        -p 3000:3000 \
+        -p 2222:22 \
+        -v "${DATA_DIR}:/data" \
+        --restart unless-stopped \
+        ${DOCKER_IMAGE} >/dev/null
+    success "Forgejo container started."
 
-[Service]
-Restart=always
-Type=simple
-User=${FORGEJO_USER}
-Group=${FORGEJO_USER}
-WorkingDirectory=${FORGEJO_HOME}
-ExecStart=/usr/local/bin/forgejo web --config ${FORGEJO_CONFIG_DIR}/app.ini
-Environment=USER=${FORGEJO_USER} HOME=${FORGEJO_HOME}
-ProtectSystem=full
-PrivateTmp=true
-
-[Install]
-WantedBy=multi-user.target
-EOF
-    pct exec "${CTID}" -- systemctl daemon-reload
-    pct exec "${CTID}" -- systemctl enable --now forgejo
-    success "Forgejo service created and started."
-
-    # Step 5: Final Status
-    print_status "[5/5] Finalizing Setup..."
+    # Step 4: Final Status
+    print_status "[4/4] Finalizing Setup..."
     sleep 5 # Give Forgejo a moment to start
     status
 }
@@ -127,8 +110,8 @@ status() {
     print_status "--- LXC ${CTID} Status ---"
     pct status "${CTID}"
     
-    print_status "--- Forgejo Service Status (inside LXC) ---"
-    pct exec "${CTID}" -- systemctl status forgejo --no-pager || print_warning "Could not get Forgejo status."
+    print_status "--- Forgejo Docker Container Status (inside LXC) ---"
+    pct exec "${CTID}" -- docker ps --filter "name=${CONTAINER_NAME}"
 
     local ip_address=$(echo "${CT_IP}" | cut -d'/' -f1)
     echo ""
@@ -139,14 +122,20 @@ status() {
     echo "   1. Open your browser and go to: http://${ip_address}:3000"
     echo "   2. Complete the web-based installation wizard."
     echo "      - Database Type: Select 'SQLite3'."
-    echo "      - Configure your admin account and other settings."
+    echo "      - Server Domain: Use '${ip_address}'."
+    echo "      - SSH Server Port: Use '2222'."
+    echo "      - Base URL: Use 'http://${ip_address}:3000/'."
+    echo "      - Configure your admin account."
+    echo ""
+    echo -e "${YELLOW}Git SSH URL for your repos will look like:${NC}"
+    echo "   ssh://git@${ip_address}:2222/YourUser/YourRepo.git"
     echo ""
 }
 
 show_menu() {
     clear
     echo "==================================================="
-    echo "        Forgejo on Proxmox - LXC Management"
+    echo "   Forgejo (Docker) on Proxmox - LXC Management"
     echo "==================================================="
     echo "  Manages LXC ${CTID} (${CTNAME})"
     echo "==================================================="
@@ -173,7 +162,7 @@ main() {
             3) print_status "Starting LXC ${CTID}..."; pct start "${CTID}" ;;
             4) print_status "Stopping LXC ${CTID}..."; pct stop "${CTID}" ;;
             5) status ;;
-            6) print_status "Following logs for Forgejo. Press Ctrl+C to stop."; pct exec "${CTID}" -- journalctl -u forgejo -f ;; 
+            6) print_status "Following logs for ${CONTAINER_NAME}. Press Ctrl+C to stop."; pct exec "${CTID}" -- docker logs -f ${CONTAINER_NAME} ;; 
             7) pct enter "${CTID}" ;;
             0) break ;;
             *) print_error "Invalid option." ;;
