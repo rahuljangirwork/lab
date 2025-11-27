@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-### ========== CONFIG (edit to fit your office) ==========
+### ========== CONFIG (edit to fit your office) ========== 
 CTID="${CTID:-101}"
 CTNAME="${CTNAME:-wg-office}"
 STORAGE="${STORAGE:-local-lvm}"
@@ -44,16 +44,15 @@ setup() {
   fi
   
   info "[3/5] Installing Docker..."
-  # Check if docker is already installed
   if pct exec "$CTID" -- command -v docker &>/dev/null; then
     warn "Docker is already installed. Skipping installation."
   else
-    # Use the get.docker.com script for simplicity, as shown in the reference script
     pct exec "$CTID" -- apt-get update
     pct exec "$CTID" -- apt-get install -y curl
     pct exec "$CTID" -- bash -c "curl -fsSL https://get.docker.com | sh"
-    # Verify installation
-    if ! pct exec "$CTID" -- command -v docker &>/dev/null; then
+    
+    # **FIXED VERIFICATION STEP**
+    if ! pct exec "$CTID" -- docker --version &>/dev/null; then
       error "Docker installation failed. Please check the output above."
     fi
     success "Docker installed successfully."
@@ -81,12 +80,12 @@ EOF
   
   info "[5/5] Deploying WireGuard Service (wg-easy)..."
   local COMPOSE_DIR="/opt/wireguard"
-pct exec "$CTID" -- mkdir -p "$COMPOSE_DIR/config"
+  pct exec "$CTID" -- mkdir -p "$COMPOSE_DIR/config"
 pct push "$CTID" "./wireguard/docker-compose.yml" "$COMPOSE_DIR/docker-compose.yml"
 pct push "$CTID" "./wireguard/.env" "$COMPOSE_DIR/.env"
 rm "./wireguard/.env" # Clean up local temp file
 
-pct exec "$CTID" -- bash -c "cd $COMPOSE_DIR && docker compose up -d"
+  pct exec "$CTID" -- bash -c "cd $COMPOSE_DIR && docker compose up -d"
   
   echo
   success "=== SETUP COMPLETE ==="
