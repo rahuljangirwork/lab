@@ -4,15 +4,28 @@ set -e
 #================================================================================
 #   RustDesk API Server + Tailscale Private Deployment Management Script
 #================================================================================
-# This script automates the setup of a self-hosted RustDesk API server
-# (from lejianwen) that is only accessible over a private Tailscale network.
+# This script automates the setup of a self-hosted RustDesk API server that
+# is only accessible over a private Tailscale network.
+#
+# It is designed to be run inside the LXC container where the server will live.
 #================================================================================
 
-# --- Configuration ---
+### ========== CONFIGURATION ==========
+# The name for the main RustDesk Docker container.
 CONTAINER_NAME='rustdesk-server'
-# Using the all-in-one image you requested
+
+# The Docker image to use. 'lejianwen/rustdesk-api:full-s6' provides an all-in-one
+# server with a web UI.
 DOCKER_IMAGE='lejianwen/rustdesk-api:full-s6'
+
+# The directory on the LXC host where RustDesk will store its data and keys.
 DATA_DIR='/var/lib/rustdesk-data'
+
+# Set the password for the RustDesk web admin panel here.
+# If you leave this blank (e.g., RUSTDESK_ADMIN_PASSWORD=""), the script will
+# prompt you to enter a password when it runs.
+RUSTDESK_ADMIN_PASSWORD=""
+### ===================================
 
 # --- Helper Functions ---
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
@@ -53,14 +66,19 @@ setup() {
 
     # Step 3: Get User Input
     print_status "[3/5] Preparing Configuration..."
-    local admin_pass confirm_pass
-    while true;
-    do
-        read -sp "Enter a password for the RustDesk web admin panel: " admin_pass; echo
-        read -sp "Confirm password: " confirm_pass; echo
-        [ "$admin_pass" == "$confirm_pass" ] && [ -n "$admin_pass" ] && break
-        print_warning "Passwords do not match or are empty. Please try again."
-    done
+    local admin_pass="$RUSTDESK_ADMIN_PASSWORD"
+    if [ -z "$admin_pass" ]; then
+        print_warning "No admin password was set in the script's CONFIG block."
+        local confirm_pass
+        while true; do
+            read -sp "Enter a password for the RustDesk web admin panel: " admin_pass; echo
+            read -sp "Confirm password: " confirm_pass; echo
+            [ "$admin_pass" == "$confirm_pass" ] && [ -n "$admin_pass" ] && break
+            print_warning "Passwords do not match or are empty. Please try again."
+        done
+    else
+        print_status "Using admin password from the script's configuration block."
+    fi
     success "Password has been set."
 
     # Step 4: Run RustDesk Container
@@ -68,13 +86,13 @@ setup() {
     mkdir -p "$DATA_DIR/server" "$DATA_DIR/api"
     
     if [ "$(docker ps -a -q -f name=$CONTAINER_NAME)" ]; then
-        print_warning "Removing existing RustDesk container(s)..."
+        print_warning "Removing existing RustDesk container..."
         docker stop $CONTAINER_NAME &>/dev/null || true
         docker rm $CONTAINER_NAME &>/dev/null || true
     fi
 
-    print_status "Pulling new Docker image (this may take a moment)..."
-    docker pull $DOCKER_IMAGE
+    print_status "Pulling Docker image: $DOCKER_IMAGE..."
+    docker pull $DOCKER_IMAGE >/dev/null
 
     print_status "Starting RustDesk container..."
     docker run -d --name $CONTAINER_NAME \
@@ -134,7 +152,7 @@ status() {
     echo -e "\n${YELLOW}🌐 Web Admin Panel:${NC}"
     echo "   URL:      http://$tailscale_ip:21114/_admin/"
     echo "   Username: admin"
-    echo "   Password: (the password you set during setup)"
+    echo "   Password: (the password you set in the script or when prompted)"
     echo ""
     echo -e "${YELLOW}🔧 Configure Your RustDesk Clients with this information:${NC}"
     echo "   ID Server:    $tailscale_ip"
@@ -163,19 +181,18 @@ show_menu() {
 
 main() {
     check_root
-    while true;
-    do
+    while true; do
         show_menu
         read -p "Enter your choice [0-6]: " choice
         case "$choice" in
-            1) setup ;;
-            2) destroy ;;
-            3) print_status "Starting container..."; docker start $CONTAINER_NAME ;;
-            4) print_status "Stopping container..."; docker stop $CONTAINER_NAME ;;
-            5) status ;;
-            6) print_status "Following logs. Press Ctrl+C to stop."; docker logs -f $CONTAINER_NAME ;;
-            0) break ;;
-            *) print_error "Invalid option." ;;
+            1) setup ;; 
+            2) destroy ;; 
+            3) print_status "Starting container..."; docker start $CONTAINER_NAME ;; 
+            4) print_status "Stopping container..."; docker stop $CONTAINER_NAME ;; 
+            5) status ;; 
+            6) print_status "Following logs. Press Ctrl+C to stop."; docker logs -f $CONTAINER_NAME ;; 
+            0) break ;; 
+            *) print_error "Invalid option." ;; 
         esac
         echo; read -p "Press Enter to return to the menu..."
     done
