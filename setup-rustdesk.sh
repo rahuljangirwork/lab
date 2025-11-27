@@ -19,6 +19,7 @@ RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
 print_status() { echo -e "\n${GREEN}[INFO] $1${NC}"; }
 print_error() { echo -e "\n${RED}[ERROR] $1${NC}"; }
 print_warning() { echo -e "\n${YELLOW}[WARNING] $1${NC}"; }
+success() { echo -e "\n${GREEN}[SUCCESS] $1${NC}"; }
 
 # --- Core Functions ---
 
