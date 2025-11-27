@@ -24,14 +24,14 @@ success() { echo -e "${C_GREEN}[SUCCESS]${C_NC} $1"; }
 # --- Core Functions ---
 
 setup() {
-  info "[1/6] Checking prerequisites..."
+  info "[1/7] Checking prerequisites..."
   command -v pct >/dev/null 2>&1 || error "pct command not found. Run this on Proxmox."
   if ! pveam list local | awk '{print $1}' | grep -q "$(basename "$TEMPLATE")"; then
     error "Template $TEMPLATE not found. Please run: pveam download local $(basename "$TEMPLATE")"
   fi
   success "Prerequisites met."
 
-  info "[2/6] Creating LXC Container..."
+  info "[2/7] Creating LXC Container..."
   if pct status "$CTID" >/dev/null 2>&1; then
     warn "CT $CTID already exists. Skipping creation."
   else
@@ -43,7 +43,7 @@ setup() {
     sleep 5
   fi
   
-  info "[3/6] Applying AppArmor Security Profile for Docker..."
+  info "[3/7] Applying AppArmor Security Profile for Docker..."
   local CONF_FILE="/etc/pve/lxc/${CTID}.conf"
   if ! grep -q "lxc.apparmor.profile: unconfined" "$CONF_FILE"; then
     warn "Applying unconfined AppArmor profile to allow Docker sysctl changes."
@@ -51,7 +51,7 @@ setup() {
     info "Rebooting CT $CTID to apply new security profile..."
     pct reboot "$CTID"
     info "Waiting for container to come back online (can take up to 30s)..."
-    sleep 10 # Initial wait
+    sleep 10
     until pct exec "$CTID" -- ping -c 1 8.8.8.8 &>/dev/null; do
       warn "Waiting for network..." && sleep 3
     done
@@ -60,12 +60,19 @@ setup() {
     info "AppArmor profile already set."
   fi
 
-  info "[4/6] Installing Docker..."
+  info "[4/7] Applying Kernel Parameters on LXC..."
+  pct exec "$CTID" -- bash -c "
+    echo 'net.ipv4.ip_forward=1' > /etc/sysctl.d/99-wireguard.conf
+    echo 'net.ipv4.conf.all.src_valid_mark=1' >> /etc/sysctl.d/99-wireguard.conf
+    sysctl -p /etc/sysctl.d/99-wireguard.conf
+  "
+  success "Kernel parameters applied."
+
+  info "[5/7] Installing Docker..."
   if pct exec "$CTID" -- docker --version &>/dev/null; then
     warn "Docker is already installed. Skipping installation."
   else
-    pct exec "$CTID" -- apt-get update
-    pct exec "$CTID" -- apt-get install -y curl
+    pct exec "$CTID" -- apt-get update && pct exec "$CTID" -- apt-get install -y curl
     pct exec "$CTID" -- bash -c "curl -fsSL https://get.docker.com | sh"
     if ! pct exec "$CTID" -- docker --version &>/dev/null; then
       error "Docker installation failed. Please check the output above."
@@ -73,26 +80,23 @@ setup() {
     success "Docker installed successfully."
   fi
 
-  info "[5/6] Preparing WireGuard Configuration..."
+  info "[6/7] Preparing WireGuard Configuration..."
   local wg_host admin_pass confirm_pass
-  echo "Please provide the public address for your WireGuard server."
   read -p "Enter WireGuard Host (e.g., vpn.yourdomain.com or your public IP): " wg_host
   [ -z "$wg_host" ] && error "WireGuard Host cannot be empty."
-
   while true; do
       read -sp "Enter a password for the WireGuard web admin panel: " admin_pass; echo
       read -sp "Confirm password: " confirm_pass; echo
       [ "$admin_pass" == "$confirm_pass" ] && [ -n "$admin_pass" ] && break
       warn "Passwords do not match or are empty. Please try again."
   done
-
   cat > ./wireguard/.env <<EOF
 WG_HOST=${wg_host}
 PASSWORD=${admin_pass}
 WG_ALLOWED_IPS_DEFAULT=${OFFICE_LAN_CIDR},${WG_NET}
 EOF
   
-  info "[6/6] Deploying WireGuard Service (wg-easy)..."
+  info "[7/7] Deploying WireGuard Service (wg-easy)..."
   local COMPOSE_DIR="/opt/wireguard"
   pct exec "$CTID" -- mkdir -p "$COMPOSE_DIR/config"
   pct push "$CTID" "./wireguard/docker-compose.yml" "$COMPOSE_DIR/docker-compose.yml"
@@ -111,7 +115,6 @@ destroy() {
   warn "This will permanently stop and delete the container CT $CTID ($CTNAME)."
   read -p "Are you sure? [y/N] " -n 1 -r; echo
   if [[ ! $REPLY =~ ^[Yy]$ ]]; then info "Aborted."; return; fi
-  
   info "Stopping CT $CTID..."; pct stop "$CTID" || true
   info "Destroying CT $CTID..."; pct destroy "$CTID"
   success "CT $CTID has been destroyed."
@@ -134,24 +137,15 @@ ct_action() {
   local action=$1
   if ! pct status "$CTID" >/dev/null 2>&1; then error "CT $CTID does not exist."; fi
   info "${action}-ing CT $CTID..."; pct "$action" "$CTID"
-  success "CT $CTID finished ${action}. "
+  success "CT $CTID finished ${action}."
 }
 
 show_menu() {
     clear
     echo -e "${C_GREEN}WireGuard Lab Management Menu (Docker Compose Edition)${C_NC}"
-    echo "---------------------------------"
-    echo " 1) Setup / Re-deploy WireGuard"
-    echo -e " 2) ${C_RED}Destroy WireGuard CT${C_NC}"
-    echo "---------------------------------"
-    echo " 3) Start CT"
-    echo " 4) Stop CT"
-    echo " 5) Reboot CT"
-    echo " 6) Show Status"
-    echo " 7) Open Shell in CT"
-    echo "---------------------------------"
-    echo -e " 0) ${C_YELLOW}Quit${C_NC}"
-    echo "---------------------------------"
+    echo "---------------------------------"; echo " 1) Setup / Re-deploy WireGuard"; echo -e " 2) ${C_RED}Destroy WireGuard CT${C_NC}"
+    echo "---------------------------------"; echo " 3) Start CT"; echo " 4) Stop CT"; echo " 5) Reboot CT"
+    echo " 6) Show Status"; echo " 7) Open Shell in CT"; echo "---------------------------------"; echo -e " 0) ${C_YELLOW}Quit${C_NC}"; echo "---------------------------------"
 }
 
 main() {
@@ -159,15 +153,8 @@ main() {
     show_menu
     read -p "Enter your choice [0-7]: " choice
     case "$choice" in
-      1) setup ;;
-      2) destroy ;;
-      3) ct_action "start" ;;
-      4) ct_action "stop" ;;
-      5) ct_action "reboot" ;;
-      6) status ;;
-      7) pct enter "$CTID" ;;
-      0) break ;;
-      *) warn "Invalid option." ;;
+      1) setup ;; 2) destroy ;; 3) ct_action \"start\" ;; 4) ct_action \"stop\" ;; 5) ct_action \"reboot\" ;;
+      6) status ;; 7) pct enter \"$CTID\" ;; 0) break ;; *) warn \"Invalid option.\" ;; 
     esac
     echo; read -p "Press Enter to return to the menu..."
   done
