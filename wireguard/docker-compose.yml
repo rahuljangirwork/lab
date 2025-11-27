@@ -2,6 +2,8 @@ services:
   wg-easy:
     image: weejewel/wg-easy:latest
     container_name: wg-easy
+    # This is the fix: Use the host's network directly.
+    network_mode: host
     environment:
       # WG_HOST is the public-facing IP/domain of the VPN server.
       - WG_HOST=${WG_HOST}
@@ -9,8 +11,8 @@ services:
       # The password for the wg-easy web UI.
       - PASSWORD=${PASSWORD}
 
-      # This new line adds the NAT rule to fix local access issues.
-      - WG_POST_UP=iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o eth0 -j MASQUERADE
+      # This NAT rule allows clients to access the LAN.
+      - WG_POST_UP=iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -j MASQUERADE
 
       # Optional: Default DNS server for clients.
       - WG_DEFAULT_DNS=1.1.1.1
@@ -20,11 +22,7 @@ services:
     volumes:
       # This volume is crucial. It stores the WireGuard configuration files.
       - ./config:/etc/wireguard
-    ports:
-      # Port for the wg-easy web UI
-      - "51821:51821/tcp"
-      # Port for the WireGuard VPN connection itself
-      - "51820:51820/udp"
+    # The 'ports' section is no longer needed with network_mode: host
     restart: unless-stopped
     cap_add:
       - NET_ADMIN
