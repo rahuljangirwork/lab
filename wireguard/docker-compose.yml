@@ -4,17 +4,18 @@ services:
     container_name: wg-easy
     environment:
       # WG_HOST is the public-facing IP/domain of the VPN server.
-      # This is the MOST IMPORTANT variable to set.
       - WG_HOST=${WG_HOST}
 
       # The password for the wg-easy web UI.
       - PASSWORD=${PASSWORD}
 
+      # This new line adds the NAT rule to fix local access issues.
+      - WG_POST_UP=iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o eth0 -j MASQUERADE
+
       # Optional: Default DNS server for clients.
       - WG_DEFAULT_DNS=1.1.1.1
 
       # Optional: The default client allowed IPs.
-      # Defaults to the office LAN and the VPN subnet.
       - WG_ALLOWED_IPS=${WG_ALLOWED_IPS_DEFAULT}
     volumes:
       # This volume is crucial. It stores the WireGuard configuration files.
