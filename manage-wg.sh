@@ -24,14 +24,14 @@ success() { echo -e "${C_GREEN}[SUCCESS]${C_NC} $1"; }
 # --- Core Functions ---
 
 setup() {
-  info "[1/5] Checking prerequisites..."
+  info "[1/6] Checking prerequisites..."
   command -v pct >/dev/null 2>&1 || error "pct command not found. Run this on Proxmox."
   if ! pveam list local | awk '{print $1}' | grep -q "$(basename "$TEMPLATE")"; then
     error "Template $TEMPLATE not found. Please run: pveam download local $(basename "$TEMPLATE")"
   fi
   success "Prerequisites met."
 
-  info "[2/5] Creating LXC Container..."
+  info "[2/6] Creating LXC Container..."
   if pct status "$CTID" >/dev/null 2>&1; then
     warn "CT $CTID already exists. Skipping creation."
   else
@@ -43,22 +43,37 @@ setup() {
     sleep 5
   fi
   
-  info "[3/5] Installing Docker..."
-  if pct exec "$CTID" -- command -v docker &>/dev/null; then
+  info "[3/6] Applying AppArmor Security Profile for Docker..."
+  local CONF_FILE="/etc/pve/lxc/${CTID}.conf"
+  if ! grep -q "lxc.apparmor.profile: unconfined" "$CONF_FILE"; then
+    warn "Applying unconfined AppArmor profile to allow Docker sysctl changes."
+    echo "lxc.apparmor.profile: unconfined" >> "$CONF_FILE"
+    info "Rebooting CT $CTID to apply new security profile..."
+    pct reboot "$CTID"
+    info "Waiting for container to come back online (can take up to 30s)..."
+    sleep 10 # Initial wait
+    until pct exec "$CTID" -- ping -c 1 8.8.8.8 &>/dev/null; do
+      warn "Waiting for network..." && sleep 3
+    done
+    success "Container is back online."
+  else
+    info "AppArmor profile already set."
+  fi
+
+  info "[4/6] Installing Docker..."
+  if pct exec "$CTID" -- docker --version &>/dev/null; then
     warn "Docker is already installed. Skipping installation."
   else
     pct exec "$CTID" -- apt-get update
     pct exec "$CTID" -- apt-get install -y curl
     pct exec "$CTID" -- bash -c "curl -fsSL https://get.docker.com | sh"
-    
-    # **FIXED VERIFICATION STEP**
     if ! pct exec "$CTID" -- docker --version &>/dev/null; then
       error "Docker installation failed. Please check the output above."
     fi
     success "Docker installed successfully."
   fi
 
-  info "[4/5] Preparing WireGuard Configuration..."
+  info "[5/6] Preparing WireGuard Configuration..."
   local wg_host admin_pass confirm_pass
   echo "Please provide the public address for your WireGuard server."
   read -p "Enter WireGuard Host (e.g., vpn.yourdomain.com or your public IP): " wg_host
@@ -71,19 +86,18 @@ setup() {
       warn "Passwords do not match or are empty. Please try again."
   done
 
-  # Create a temporary .env file
   cat > ./wireguard/.env <<EOF
 WG_HOST=${wg_host}
 PASSWORD=${admin_pass}
 WG_ALLOWED_IPS_DEFAULT=${OFFICE_LAN_CIDR},${WG_NET}
 EOF
   
-  info "[5/5] Deploying WireGuard Service (wg-easy)..."
+  info "[6/6] Deploying WireGuard Service (wg-easy)..."
   local COMPOSE_DIR="/opt/wireguard"
   pct exec "$CTID" -- mkdir -p "$COMPOSE_DIR/config"
-pct push "$CTID" "./wireguard/docker-compose.yml" "$COMPOSE_DIR/docker-compose.yml"
-pct push "$CTID" "./wireguard/.env" "$COMPOSE_DIR/.env"
-rm "./wireguard/.env" # Clean up local temp file
+  pct push "$CTID" "./wireguard/docker-compose.yml" "$COMPOSE_DIR/docker-compose.yml"
+  pct push "$CTID" "./wireguard/.env" "$COMPOSE_DIR/.env"
+  rm "./wireguard/.env"
 
   pct exec "$CTID" -- bash -c "cd $COMPOSE_DIR && docker compose up -d"
   
@@ -120,7 +134,7 @@ ct_action() {
   local action=$1
   if ! pct status "$CTID" >/dev/null 2>&1; then error "CT $CTID does not exist."; fi
   info "${action}-ing CT $CTID..."; pct "$action" "$CTID"
-  success "CT $CTID finished ${action}."
+  success "CT $CTID finished ${action}. "
 }
 
 show_menu() {

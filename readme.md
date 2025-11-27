@@ -23,3 +23,6 @@ Create a peer: pct exec 101 -- wg-add-peer phone 10.8.0.10/24 full
 
 
 Create a peer: pct exec 101 -- wg-add-peer phone 10.8.0.11/24 lan
+
+
+vpn.getmysolutions.in
