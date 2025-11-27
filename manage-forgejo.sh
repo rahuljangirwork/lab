@@ -44,7 +44,7 @@ setup() {
     print_status "Starting Full Setup for Forgejo (Docker) LXC ${CTID}..."
 
     # Step 1: Create LXC
-    print_status "[1/4] Creating LXC ${CTID}..."
+    print_status "[1/5] Creating LXC ${CTID}..."
     if pct status "${CTID}" &>/dev/null; then
         print_warning "CT ${CTID} already exists. Skipping creation."
     else
@@ -56,8 +56,27 @@ setup() {
         print_warning "Waiting for LXC to boot..." && sleep 10
     fi
 
-    # Step 2: Install Dependencies (Docker)
-    print_status "[2/4] Installing Dependencies in LXC..."
+    # Step 2: Apply LXC Configuration for Docker
+    print_status "[2/5] Applying LXC Configuration..."
+    local CONF_FILE="/etc/pve/lxc/${CTID}.conf"
+    local REBOOT_NEEDED=false
+    if ! grep -q "lxc.apparmor.profile: unconfined" "${CONF_FILE}"; then
+        print_warning "Applying unconfined AppArmor profile for Docker compatibility..."
+        echo "lxc.apparmor.profile: unconfined" >> "${CONF_FILE}"
+        REBOOT_NEEDED=true
+    fi
+
+    if [ "${REBOOT_NEEDED}" = true ]; then
+        print_warning "Rebooting LXC to apply new configuration..."
+        pct reboot "${CTID}" >/dev/null
+        print_warning "Waiting for container to reboot (up to 30s)..." && sleep 20
+    else
+        print_status "LXC configuration already set."
+    fi
+    pct start "${CTID}" &>/dev/null || true # Ensure container is running
+
+    # Step 3: Install Dependencies (Docker)
+    print_status "[3/5] Installing Dependencies in LXC..."
     pct exec "${CTID}" -- apt-get update >/dev/null
     pct exec "${CTID}" -- apt-get install -y curl ca-certificates >/dev/null
     if ! pct exec "${CTID}" -- command -v docker &>/dev/null; then
@@ -66,8 +85,8 @@ setup() {
     fi
     success "Dependencies installed."
 
-    # Step 3: Deploy Docker Container
-    print_status "[3/4] Deploying Forgejo Docker Container..."
+    # Step 4: Deploy Docker Container
+    print_status "[4/5] Deploying Forgejo Docker Container..."
     pct exec "${CTID}" -- mkdir -p "${DATA_DIR}"
     
     if pct exec "${CTID}" -- docker ps -a -q -f name=${CONTAINER_NAME} | grep -q .; then
@@ -87,8 +106,8 @@ setup() {
         ${DOCKER_IMAGE} >/dev/null
     success "Forgejo container started."
 
-    # Step 4: Final Status
-    print_status "[4/4] Finalizing Setup..."
+    # Step 5: Final Status
+    print_status "[5/5] Finalizing Setup..."
     sleep 5 # Give Forgejo a moment to start
     status
 }
