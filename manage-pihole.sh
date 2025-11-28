@@ -27,28 +27,26 @@ success() { echo -e "\n${C_GREEN}[SUCCESS]${C_NC} $1"; }
 # --- Core Functions ---
 setup() {
     info "[1/5] Creating or reusing CT ${CTID}..."
-    if pct status "$CTID" >/dev/null 2>&1; then
+    if pct status "${CTID}" >/dev/null 2>&1; then
         warn "CT $CTID already exists. Skipping creation."
     else
-        # The fix is here: --nameserver 8.8.8.8 gives the container DNS for setup.
-        pct create "$CTID" "$TEMPLATE" --hostname "$CTNAME" --storage "$STORAGE" --rootfs "${STORAGE}:${DISK_GB}" \
-          --cores "$CORES" --memory "$MEMORY" --swap 512 --onboot 1 --unprivileged 0 \
+        pct create "${CTID}" "${TEMPLATE}" --hostname "${CTNAME}" --storage "${STORAGE}" --rootfs "${STORAGE}:${DISK_GB}" \
+          --cores "${CORES}" --memory "${MEMORY}" --swap 512 --onboot 1 --unprivileged 0 \
           --net0 name=eth0,bridge=$BRIDGE,ip=$CT_IP,gw=$CT_GW \
           --nameserver 8.8.8.8 --features nesting=1 >/dev/null
-        pct start "$CTID"; sleep 5
+        pct start "${CTID}"; sleep 5
     fi
 
     info "[2/5] Installing Docker + Compose..."
-    pct exec "$CTID" -- bash -c "DEBIAN_FRONTEND=noninteractive apt-get update -qq"
-    pct exec "$CTID" -- bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl ca-certificates"
-    if ! pct exec "$CTID" -- docker --version >/dev/null 2>&1; then
+    pct exec "${CTID}" -- bash -c "DEBIAN_FRONTEND=noninteractive apt-get update -qq"
+    pct exec "${CTID}" -- bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl ca-certificates"
+    if ! pct exec "${CTID}" -- docker --version >/dev/null 2>&1; then
         info "Installing Docker..."
-        pct exec "$CTID" -- bash -c "curl -fsSL https://get.docker.com | sh" >/dev/null
+        pct exec "${CTID}" -- bash -c "curl -fsSL https://get.docker.com | sh" >/dev/null
     fi
-    # Install compose plugin manually for reliability
-    if ! pct exec "$CTID" -- docker compose version >/dev/null 2>&1; then
+    if ! pct exec "${CTID}" -- docker compose version >/dev/null 2>&1; then
         info "Installing Docker Compose plugin..."
-        pct exec "$CTID" -- bash -c "
+        pct exec "${CTID}" -- bash -c "
             set -e
             mkdir -p /usr/local/lib/docker/cli-plugins
             curl -SL https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
@@ -66,9 +64,11 @@ setup() {
         warn "Passwords do not match or are empty. Please try again."
     done
 
-    pct exec "$CTID" -- mkdir -p "${COMPOSE_DIR}"
+    pct exec "${CTID}" -- mkdir -p "${COMPOSE_DIR}"
     
-    cat <<EOF | pct push "$CTID" - "${COMPOSE_DIR}/docker-compose.yml"
+    # FIX: Create the compose file locally on the host, then push it to the container.
+    local TEMP_COMPOSE_FILE="/tmp/docker-compose-pihole.yml"
+    cat > "${TEMP_COMPOSE_FILE}" <<EOF
 version: "3"
 services:
   pihole:
@@ -88,11 +88,14 @@ services:
       - NET_ADMIN
     restart: unless-stopped
 EOF
-    success "Pi-hole docker-compose.yml created."
+
+    pct push "${CTID}" "${TEMP_COMPOSE_FILE}" "${COMPOSE_DIR}/docker-compose.yml"
+    rm "${TEMP_COMPOSE_FILE}"
+    success "Pi-hole docker-compose.yml created in container."
 
     info "[4/5] Deploying Pi-hole Container..."
-    pct exec "$CTID" -- bash -c "cd $COMPOSE_DIR && docker compose pull" >/dev/null
-    pct exec "$CTID" -- bash -c "cd $COMPOSE_DIR && docker compose up -d"
+    pct exec "${CTID}" -- bash -c "cd $COMPOSE_DIR && docker compose pull" >/dev/null
+    pct exec "${CTID}" -- bash -c "cd $COMPOSE_DIR && docker compose up -d"
 
     info "[5/5] Finalizing setup..."
     sleep 10
@@ -100,7 +103,7 @@ EOF
 }
 
 destroy() {
-    if ! pct status "$CTID" >/dev/null 2>&1; then warn "CT $CTID does not exist."; return; fi
+    if ! pct status "${CTID}" >/dev/null 2>&1; then warn "CT $CTID does not exist."; return; fi
     warn "This will permanently stop and destroy the LXC container ${CTID} and all its data."
     read -p "Are you sure? [y/N] " -n 1 -r; echo
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then info "Destroy cancelled."; return; fi
@@ -112,7 +115,7 @@ destroy() {
 }
 
 status() {
-    if ! pct status "$CTID" >/dev/null 2>&1; then warn "CT $CTID does not exist."; return; fi
+    if ! pct status "${CTID}" >/dev/null 2>&1; then warn "CT $CTID does not exist."; return; fi
     info "--- LXC ${CTID} (${CTNAME}) Status ---"
     pct status "${CTID}"
     
