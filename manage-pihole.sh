@@ -27,28 +27,28 @@ success() { echo -e "\n${C_GREEN}[SUCCESS]${C_NC} $1"; }
 # --- Core Functions ---
 setup() {
     info "[1/5] Creating or reusing CT ${CTID}..."
-    if pct status "${CTID}" >/dev/null 2>&1; then
+    if pct status "$CTID" >/dev/null 2>&1; then
         warn "CT $CTID already exists. Skipping creation."
     else
         # The fix is here: --nameserver 8.8.8.8 gives the container DNS for setup.
-        pct create "${CTID}" "${TEMPLATE}" --hostname "${CTNAME}" --storage "${STORAGE}" --rootfs "${STORAGE}:${DISK_GB}" \
-          --cores "${CORES}" --memory "${MEMORY}" --swap 512 --onboot 1 --unprivileged 0 \
+        pct create "$CTID" "$TEMPLATE" --hostname "$CTNAME" --storage "$STORAGE" --rootfs "${STORAGE}:${DISK_GB}" \
+          --cores "$CORES" --memory "$MEMORY" --swap 512 --onboot 1 --unprivileged 0 \
           --net0 name=eth0,bridge=$BRIDGE,ip=$CT_IP,gw=$CT_GW \
           --nameserver 8.8.8.8 --features nesting=1 >/dev/null
-        pct start "${CTID}"; sleep 5
+        pct start "$CTID"; sleep 5
     fi
 
     info "[2/5] Installing Docker + Compose..."
-    pct exec "${CTID}" -- bash -c "DEBIAN_FRONTEND=noninteractive apt-get update -qq"
-    pct exec "${CTID}" -- bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl ca-certificates"
-    if ! pct exec "${CTID}" -- docker --version >/dev/null 2>&1; then
+    pct exec "$CTID" -- bash -c "DEBIAN_FRONTEND=noninteractive apt-get update -qq"
+    pct exec "$CTID" -- bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl ca-certificates"
+    if ! pct exec "$CTID" -- docker --version >/dev/null 2>&1; then
         info "Installing Docker..."
-        pct exec "${CTID}" -- bash -c "curl -fsSL https://get.docker.com | sh" >/dev/null
+        pct exec "$CTID" -- bash -c "curl -fsSL https://get.docker.com | sh" >/dev/null
     fi
     # Install compose plugin manually for reliability
-    if ! pct exec "${CTID}" -- docker compose version >/dev/null 2>&1; then
+    if ! pct exec "$CTID" -- docker compose version >/dev/null 2>&1; then
         info "Installing Docker Compose plugin..."
-        pct exec "${CTID}" -- bash -c "
+        pct exec "$CTID" -- bash -c "
             set -e
             mkdir -p /usr/local/lib/docker/cli-plugins
             curl -SL https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
@@ -66,9 +66,9 @@ setup() {
         warn "Passwords do not match or are empty. Please try again."
     done
 
-    pct exec "${CTID}" -- mkdir -p "${COMPOSE_DIR}"
+    pct exec "$CTID" -- mkdir -p "${COMPOSE_DIR}"
     
-    cat <<EOF | pct push "${CTID}" - "${COMPOSE_DIR}/docker-compose.yml"
+    cat <<EOF | pct push "$CTID" - "${COMPOSE_DIR}/docker-compose.yml"
 version: "3"
 services:
   pihole:
@@ -91,8 +91,8 @@ EOF
     success "Pi-hole docker-compose.yml created."
 
     info "[4/5] Deploying Pi-hole Container..."
-    pct exec "${CTID}" -- bash -c "cd $COMPOSE_DIR && docker compose pull" >/dev/null
-    pct exec "${CTID}" -- bash -c "cd $COMPOSE_DIR && docker compose up -d"
+    pct exec "$CTID" -- bash -c "cd $COMPOSE_DIR && docker compose pull" >/dev/null
+    pct exec "$CTID" -- bash -c "cd $COMPOSE_DIR && docker compose up -d"
 
     info "[5/5] Finalizing setup..."
     sleep 10
@@ -100,7 +100,7 @@ EOF
 }
 
 destroy() {
-    if ! pct status "${CTID}" >/dev/null 2>&1; then warn "CT ${CTID} does not exist."; return; fi
+    if ! pct status "$CTID" >/dev/null 2>&1; then warn "CT $CTID does not exist."; return; fi
     warn "This will permanently stop and destroy the LXC container ${CTID} and all its data."
     read -p "Are you sure? [y/N] " -n 1 -r; echo
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then info "Destroy cancelled."; return; fi
@@ -112,14 +112,14 @@ destroy() {
 }
 
 status() {
-    if ! pct status "${CTID}" >/dev/null 2>&1; then warn "CT ${CTID} does not exist."; return; fi
+    if ! pct status "$CTID" >/dev/null 2>&1; then warn "CT $CTID does not exist."; return; fi
     info "--- LXC ${CTID} (${CTNAME}) Status ---"
     pct status "${CTID}"
     
     info "--- Pi-hole Docker Container Status (inside LXC) ---"
     pct exec "${CTID}" -- docker ps --filter "name=pihole"
 
-    local ip_address; ip_address=$(echo "${CT_IP}" | cut -d'/' -f1)
+    local ip_address; ip_address=$(echo "$CT_IP" | cut -d'/' -f1)
     echo
     success "=== Pi-hole DNS Server is Ready ==="
     echo "Web Admin URL: http://${ip_address}:8080/admin/"
@@ -136,14 +136,14 @@ show_menu() {
     echo "  Manages LXC ${CTID} (${CTNAME})"
     echo "==================================================="
     echo " 1. Setup / Re-deploy Server"
-    echo -e " 2. ${C_RED}Destroy Server LXC${NC}"
+    echo -e " 2. ${C_RED}Destroy Server LXC${C_NC}"
     echo " -------------------------------------------------"
     echo " 3. Start LXC"
     echo " 4. Stop LXC"
     echo " 5. Show Status and URL"
     echo " 6. Enter LXC Shell"
     echo " -------------------------------------------------"
-    echo -e " 0. ${C_YELLOW}Quit${NC}"
+    echo -e " 0. ${C_YELLOW}Quit${C_NC}"
     echo "==================================================="
 }
 
