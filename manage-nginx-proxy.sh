@@ -12,6 +12,7 @@ TEMPLATE="${TEMPLATE:-local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst}"
 CORES="${CORES:-2}"
 MEMORY="${MEMORY:-2048}"
 DISK_GB="${DISK_GB:-16}"
+COMPOSE_VERSION="${COMPOSE_VERSION:-v2.30.3}"
 
 COMPOSE_DIR="/opt/nginx-proxy-manager"
 LOCAL_STACK_DIR="./nginx-proxy"
@@ -77,11 +78,20 @@ setup() {
 
   info "[3/6] Installing Docker + prerequisites..."
   pct exec "$CTID" -- bash -c "apt-get update" >/dev/null
-  pct exec "$CTID" -- bash -c "apt-get install -y curl ca-certificates docker-compose-plugin" >/dev/null
+  pct exec "$CTID" -- bash -c "apt-get install -y curl ca-certificates gnupg" >/dev/null
   if ! pct exec "$CTID" -- docker --version >/dev/null 2>&1; then
     pct exec "$CTID" -- bash -c "curl -fsSL https://get.docker.com | sh" >/dev/null
   fi
-  success "Docker runtime ready."
+  pct exec "$CTID" -- bash -c "
+    set -e
+    if docker compose version >/dev/null 2>&1; then
+      exit 0
+    fi
+    mkdir -p /usr/local/lib/docker/cli-plugins
+    curl -SL https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
+    chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+  " >/dev/null
+  success "Docker runtime ready (compose plugin installed)."
 
   info "[4/6] Copying docker-compose stack..."
   pct exec "$CTID" -- mkdir -p "$COMPOSE_DIR"
