@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-### ========== CONFIGURATION ========== 
+### ========== CONFIGURATION ==========
 CTID="${CTID:-104}"
 CTNAME="${CTNAME:-pihole-dns}"
 CT_IP="${CT_IP:-192.168.0.104/24}"
@@ -26,55 +26,70 @@ success() { echo -e "\n${C_GREEN}[SUCCESS]${C_NC} $1"; }
 
 # --- Core Functions ---
 setup() {
-    info "[1/6] Creating or reusing CT ${CTID}..."
-    if pct status "$CTID" >/dev/null 2>&1; then
-        warn "CT $CTID already exists. Skipping creation."
+    info "[1/7] Creating or reusing CT ${CTID}..."
+    if pct status "${CTID}" >/dev/null 2>&1; then
+        warn "CT ${CTID} already exists. Skipping creation."
     else
-        pct create "$CTID" "$TEMPLATE" --hostname "$CTNAME" --storage "$STORAGE" --rootfs "${STORAGE}:${DISK_GB}" \
-          --cores "$CORES" --memory "$MEMORY" --swap 512 --onboot 1 --unprivileged 0 \
-          --net0 name=eth0,bridge=$BRIDGE,ip=$CT_IP,gw=$CT_GW \
+        pct create "${CTID}" "${TEMPLATE}" --hostname "${CTNAME}" --storage "${STORAGE}" --rootfs "${STORAGE}:${DISK_GB}" \
+          --cores "${CORES}" --memory "${MEMORY}" --swap 512 --onboot 1 --unprivileged 0 \
+          --net0 name=eth0,bridge=${BRIDGE},ip=${CT_IP},gw=${CT_GW} \
           --nameserver 8.8.8.8 --features nesting=1 >/dev/null
-        pct start "$CTID"; sleep 5
+        pct start "${CTID}"; sleep 5
     fi
 
-    info "[2/6] Applying AppArmor Security Profile for Docker..."
+    info "[2/7] Applying LXC Configuration for Docker & Tailscale..."
     local conf_file="/etc/pve/lxc/${CTID}.conf"
     local reboot_needed=false
-    if ! grep -q "lxc.apparmor.profile: unconfined" "$conf_file"; then
+    if ! grep -q "lxc.apparmor.profile: unconfined" "${conf_file}"; then
         warn "Applying unconfined AppArmor profile..."
-        echo "lxc.apparmor.profile: unconfined" >> "$conf_file"
+        echo "lxc.apparmor.profile: unconfined" >> "${conf_file}"
+        reboot_needed=true
+    fi
+    if ! grep -q "lxc.cgroup2.devices.allow: c 10:200 rwm" "${conf_file}"; then
+        warn "Enabling TUN device access for Tailscale..."
+        echo "lxc.cgroup2.devices.allow: c 10:200 rwm" >> "${conf_file}"
+        echo "lxc.mount.entry: /dev/net/tun dev/net/tun none bind,create=file" >> "${conf_file}"
         reboot_needed=true
     fi
 
-    if [ "$reboot_needed" = true ]; then
-        warn "Rebooting CT $CTID to apply new security profile..."
-        pct reboot "$CTID"
+    if [ "${reboot_needed}" = true ]; then
+        warn "Rebooting CT ${CTID} to apply new configuration..."
+        pct reboot "${CTID}"
         warn "Waiting for container to come back online..."
         sleep 15
     else
-        info "AppArmor profile already set."
+        info "LXC configuration already set."
     fi
-    pct start "$CTID" &>/dev/null || true
+    pct start "${CTID}" &>/dev/null || true
 
-    info "[3/6] Installing Docker + Compose..."
-    pct exec "$CTID" -- bash -c "DEBIAN_FRONTEND=noninteractive apt-get update -qq"
-    pct exec "$CTID" -- bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl ca-certificates"
-    if ! pct exec "$CTID" -- docker --version >/dev/null 2>&1; then
+    info "[3/7] Installing Dependencies (Docker, Compose, Tailscale)..."
+    pct exec "${CTID}" -- bash -c "DEBIAN_FRONTEND=noninteractive apt-get update -qq"
+    pct exec "${CTID}" -- bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl ca-certificates"
+    if ! pct exec "${CTID}" -- docker --version >/dev/null 2>&1; then
         info "Installing Docker..."
-        pct exec "$CTID" -- bash -c "curl -fsSL https://get.docker.com | sh" >/dev/null
+        pct exec "${CTID}" -- bash -c "curl -fsSL https://get.docker.com | sh" >/dev/null
     fi
-    if ! pct exec "$CTID" -- docker compose version >/dev/null 2>&1; then
+    if ! pct exec "${CTID}" -- docker compose version >/dev/null 2>&1; then
         info "Installing Docker Compose plugin..."
-        pct exec "$CTID" -- bash -c "
-            set -e
-            mkdir -p /usr/local/lib/docker/cli-plugins
-            curl -SL https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose
-            chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
-        " >/dev/null
+        pct exec "${CTID}" -- bash -c "mkdir -p /usr/local/lib/docker/cli-plugins && curl -SL https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-linux-x86_64 -o /usr/local/lib/docker/cli-plugins/docker-compose && chmod +x /usr/local/lib/docker/cli-plugins/docker-compose" >/dev/null
     fi
-    success "Docker runtime is ready."
+    if ! pct exec "${CTID}" -- tailscale --version >/dev/null 2>&1; then
+        info "Installing Tailscale..."
+        pct exec "${CTID}" -- bash -c "curl -fsSL https://tailscale.com/install.sh | sh" >/dev/null
+    fi
+    success "All dependencies are installed."
 
-    info "[4/6] Preparing Pi-hole Configuration..."
+    info "[4/7] Connecting to Tailscale Network..."
+    if ! pct exec "${CTID}" -- tailscale status | grep -q "Logged in"; then
+        warn "You need to log in to Tailscale to continue."
+        echo "The script will now run 'tailscale up'. A URL will be printed."
+        echo "Copy the URL and open it in a browser on any device to authenticate."
+        read -p "Press Enter to continue..."
+        pct exec "${CTID}" -- tailscale up
+    fi
+    success "LXC is connected to Tailscale."
+
+    info "[5/7] Preparing Pi-hole Configuration..."
     local admin_pass confirm_pass
     while true; do
         read -sp "Enter a password for the Pi-hole web admin panel: " admin_pass; echo
@@ -83,7 +98,7 @@ setup() {
         warn "Passwords do not match or are empty. Please try again."
     done
 
-    pct exec "$CTID" -- mkdir -p "${COMPOSE_DIR}"
+    pct exec "${CTID}" -- mkdir -p "${COMPOSE_DIR}"
     
     local TEMP_COMPOSE_FILE="/tmp/docker-compose-pihole.yml"
     cat > "${TEMP_COMPOSE_FILE}" <<EOF
@@ -97,7 +112,7 @@ services:
       - "8080:80/tcp"
     environment:
       TZ: 'Asia/Kolkata'
-      WEBPASSWORD: '${admin_pass}'
+      WEBPASSWORD: ${admin_pass}
     volumes:
       - './etc-pihole:/etc/pihole'
       - './etc-dnsmasq.d:/etc/dnsmasq.d'
@@ -106,20 +121,20 @@ services:
     restart: unless-stopped
 EOF
 
-    pct push "$CTID" "${TEMP_COMPOSE_FILE}" "${COMPOSE_DIR}/docker-compose.yml"
+    pct push "${CTID}" "${TEMP_COMPOSE_FILE}" "${COMPOSE_DIR}/docker-compose.yml"
     rm "${TEMP_COMPOSE_FILE}"
     success "Pi-hole docker-compose.yml created in container."
 
-    info "[5/6] Deploying Pi-hole Container..."
-    pct exec "$CTID" -- bash -c "cd $COMPOSE_DIR && docker compose up -d"
+    info "[6/7] Deploying Pi-hole Container..."
+    pct exec "${CTID}" -- bash -c "cd $COMPOSE_DIR && docker compose up -d"
 
-    info "[6/6] Finalizing setup..."
+    info "[7/7] Finalizing setup..."
     sleep 10
     status
 }
 
 destroy() {
-    if ! pct status "$CTID" >/dev/null 2>&1; then warn "CT $CTID does not exist."; return; fi
+    if ! pct status "${CTID}" >/dev/null 2>&1; then warn "CT ${CTID} does not exist."; return; fi
     warn "This will permanently stop and destroy the LXC container ${CTID} and all its data."
     read -p "Are you sure? [y/N] " -n 1 -r; echo
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then info "Destroy cancelled."; return; fi
@@ -131,20 +146,24 @@ destroy() {
 }
 
 status() {
-    if ! pct status "$CTID" >/dev/null 2>&1; then warn "CT $CTID does not exist."; return; fi
+    if ! pct status "${CTID}" >/dev/null 2>&1; then warn "CT ${CTID} does not exist."; return; fi
     info "--- LXC ${CTID} (${CTNAME}) Status ---"
     pct status "${CTID}"
     
     info "--- Pi-hole Docker Container Status (inside LXC) ---"
-    pct exec "$CTID" -- docker ps --filter "name=pihole"
+    pct exec "${CTID}" -- docker ps --filter "name=pihole"
 
-    local ip_address; ip_address=$(echo "$CT_IP" | cut -d'/' -f1)
+    local ip_address; ip_address=$(echo "${CT_IP}" | cut -d'/' -f1)
+    local tailscale_ip; tailscale_ip=$(pct exec "${CTID}" -- tailscale ip -4 2>/dev/null || echo "Not Available")
     echo
     success "=== Pi-hole DNS Server is Ready ==="
-    echo "Web Admin URL: http://${ip_address}:8080/admin/"
-    echo "Password:      (the password you set during setup)"
+    echo "Your local DNS server IP is: ${ip_address}"
     echo
-    echo "Your new local DNS server IP is: ${ip_address}"
+    warn "--- Access URLs ---"
+    echo "Local LAN URL: http://${ip_address}:8080/admin/"
+    echo "Tailscale URL: http://${tailscale_ip}:8080/admin/"
+    echo
+    echo "Password: (the password you set during setup)"
 }
 
 show_menu() {
