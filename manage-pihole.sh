@@ -26,7 +26,7 @@ success() { echo -e "\n${C_GREEN}[SUCCESS]${C_NC} $1"; }
 
 # --- Core Functions ---
 setup() {
-    info "[1/7] Creating or reusing CT ${CTID}..."
+    info "[1/8] Creating or reusing CT ${CTID}..."
     if pct status "${CTID}" >/dev/null 2>&1; then
         warn "CT ${CTID} already exists. Skipping creation."
     else
@@ -37,7 +37,7 @@ setup() {
         pct start "${CTID}"; sleep 5
     fi
 
-    info "[2/7] Applying LXC Configuration for Docker & Tailscale..."
+    info "[2/8] Applying LXC Configuration for Docker & Tailscale..."
     local conf_file="/etc/pve/lxc/${CTID}.conf"
     local reboot_needed=false
     if ! grep -q "lxc.apparmor.profile: unconfined" "${conf_file}"; then
@@ -51,7 +51,6 @@ setup() {
         echo "lxc.mount.entry: /dev/net/tun dev/net/tun none bind,create=file" >> "${conf_file}"
         reboot_needed=true
     fi
-    # FIX: Permanently set a DNS server in the LXC config to survive reboots during setup
     if ! grep -q "nameserver: 8.8.8.8" "${conf_file}"; then
         warn "Permanently setting DNS server for setup phase..."
         echo "nameserver: 8.8.8.8" >> "${conf_file}"
@@ -68,7 +67,7 @@ setup() {
     fi
     pct start "${CTID}" &>/dev/null || true
 
-    info "[3/7] Installing Dependencies (Docker, Compose, Tailscale)..."
+    info "[3/8] Installing Dependencies (Docker, Compose, Tailscale)..."
     pct exec "${CTID}" -- bash -c "DEBIAN_FRONTEND=noninteractive apt-get update -qq"
     pct exec "${CTID}" -- bash -c "DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl ca-certificates"
     if ! pct exec "${CTID}" -- docker --version >/dev/null 2>&1; then
@@ -85,17 +84,7 @@ setup() {
     fi
     success "All dependencies are installed."
 
-    info "[4/7] Connecting to Tailscale Network..."
-    if ! pct exec "${CTID}" -- tailscale status | grep -q "Logged in"; then
-        warn "You need to log in to Tailscale to continue."
-        echo "The script will now run 'tailscale up'. A URL will be printed."
-        echo "Copy the URL and open it in a browser on any device to authenticate."
-        read -p "Press Enter to continue..."
-        pct exec "${CTID}" -- tailscale up
-    fi
-    success "LXC is connected to Tailscale."
-
-    info "[5/7] Preparing Pi-hole Configuration..."
+    info "[4/8] Preparing Pi-hole Configuration..."
     local admin_pass confirm_pass
     while true; do
         read -sp "Enter a password for the Pi-hole web admin panel: " admin_pass; echo
@@ -131,10 +120,23 @@ EOF
     rm "${TEMP_COMPOSE_FILE}"
     success "Pi-hole docker-compose.yml created in container."
 
-    info "[6/7] Deploying Pi-hole Container..."
+    info "[5/8] Pulling Pi-hole Docker image..."
+    pct exec "${CTID}" -- bash -c "cd $COMPOSE_DIR && docker compose pull"
+
+    info "[6/8] Connecting to Tailscale Network..."
+    if ! pct exec "${CTID}" -- tailscale status | grep -q "Logged in"; then
+        warn "You need to log in to Tailscale to continue."
+        echo "The script will now run 'tailscale up'. A URL will be printed."
+        echo "Copy the URL and open it in a browser on any device to authenticate."
+        read -p "Press Enter to continue..."
+        pct exec "${CTID}" -- tailscale up
+    fi
+    success "LXC is connected to Tailscale."
+
+    info "[7/8] Deploying Pi-hole Container..."
     pct exec "${CTID}" -- bash -c "cd $COMPOSE_DIR && docker compose up -d"
 
-    info "[7/7] Finalizing setup..."
+    info "[8/8] Finalizing setup..."
     sleep 10
     status
 }
