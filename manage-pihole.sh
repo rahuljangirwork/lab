@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-### ========== CONFIGURATION ==========
+### ========== CONFIGURATION ========== 
 CTID="${CTID:-104}"
 CTNAME="${CTNAME:-pihole-dns}"
 CT_IP="${CT_IP:-192.168.0.104/24}"
@@ -33,7 +33,7 @@ setup() {
         pct create "${CTID}" "${TEMPLATE}" --hostname "${CTNAME}" --storage "${STORAGE}" --rootfs "${STORAGE}:${DISK_GB}" \
           --cores "${CORES}" --memory "${MEMORY}" --swap 512 --onboot 1 --unprivileged 0 \
           --net0 name=eth0,bridge=${BRIDGE},ip=${CT_IP},gw=${CT_GW} \
-          --nameserver 8.8.8.8 --features nesting=1 >/dev/null
+          --features nesting=1 >/dev/null
         pct start "${CTID}"; sleep 5
     fi
 
@@ -49,6 +49,12 @@ setup() {
         warn "Enabling TUN device access for Tailscale..."
         echo "lxc.cgroup2.devices.allow: c 10:200 rwm" >> "${conf_file}"
         echo "lxc.mount.entry: /dev/net/tun dev/net/tun none bind,create=file" >> "${conf_file}"
+        reboot_needed=true
+    fi
+    # FIX: Permanently set a DNS server in the LXC config to survive reboots during setup
+    if ! grep -q "nameserver: 8.8.8.8" "${conf_file}"; then
+        warn "Permanently setting DNS server for setup phase..."
+        echo "nameserver: 8.8.8.8" >> "${conf_file}"
         reboot_needed=true
     fi
 
